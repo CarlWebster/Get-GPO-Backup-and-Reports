@@ -1,5 +1,7 @@
 #Requires -Version 3.0
+#requires -Module ActiveDirectory
 #requires -Module GroupPolicy
+
 
 <#
 .SYNOPSIS
@@ -58,6 +60,8 @@
 	Example: Tullahoma
 
 	Default value is $Env:USERDNSDOMAIN
+
+	If both ADDomain and OrganizationalUnit are used, the latter takes preference.
 .PARAMETER ComputerName
 	Specifies which domain controller to use to run the script against.
 	ComputerName can be entered as the NetBIOS name, FQDN, localhost or IP Address.
@@ -71,11 +75,28 @@
 	Specifies the optional output folder to save the output report. 
 	
 	The folder specified must already exist.
+.PARAMETER GPOFilter
+	Specifies a text string to restrict GPOs retrieve.
+	
+	If GPOFilter is XenApp, then every GPO in the ADDomain or OrganizationalUnit
+	That has "XenApp" anywhere in the name is backed up and has reports
+	generated.
+	
+	Default is all GPOs.
 .PARAMETER MaxZipSize
 	Specifies the maximum size, in MB, of the two Zip files created.
 	Default is 150MB which is the limit of Outlook 365 email attachments.
 	
 	https://technet.microsoft.com/en-us/library/exchange-online-limits.aspx#MessageLimits
+.PARAMETER OrganizationalUnit
+	Restricts the retrieval of computer accounts to a specific OU tree. 
+	Must be entered in Distinguished Name format. i.e. OU=XenDesktop,DC=domain,DC=tld. 
+	
+	The script GPOs from the top level OU and all sub-level OUs.
+	
+	If both ADDomain and OrganizationalUnit are used, the latter takes preference.
+	
+	Alias OU
 .PARAMETER SmtpServer
 	Specifies the optional email server to send the output report. 
 .PARAMETER SmtpPort
@@ -152,15 +173,36 @@
 	
 	If the current user's credentials are not valid to send email, 
 	the user will be prompted to enter valid credentials.
+.EXAMPLE
+	PS c:\PSScript > .\Get-GPOBackupAndReports.ps1 -folder c:\gpobackups 
+	-ou "ou=lab,dc=labaddomain,dc=com" -gpofilter "xenapp"
+	
+	Processes all GPOs in the OU "lab" in the domain LabAdomain.com 
+	that contain "xenapp" anywhere in the GPO name.
+.EXAMPLE
+	PS c:\PSScript > .\Get-GPOBackupAndReports.ps1 -folder c:\gpobackups 
+	-ou "ou=lab,dc=labaddomain,dc=com"
+	
+	Processes all GPOs in the OU "lab" in the domain LabAdomain.com.
+.EXAMPLE
+	PS c:\PSScript > .\Get-GPOBackupAndReports.ps1 -folder c:\gpobackups 
+	-ou "ou=lab,dc=labaddomain,dc=com" -GPOFilter ""
+	
+	Processes all GPOs in the OU "lab" in the domain LabADDomain.com.
+.EXAMPLE
+	PS c:\PSScript > .\Get-GPOBackupAndReports.ps1 -folder c:\gpobackups 
+	-ou ""
+	
+	Processes all GPOs in all OUs in the default domain of $Env:USERDNSDOMAIN.
 .INPUTS
 	None.  You cannot pipe objects to this script.
 .OUTPUTS
 	No objects are output from this script.
 .NOTES
 	NAME: Get-GPOBackupAndReports.ps1
-	VERSION: 1.10
+	VERSION: 1.20
 	AUTHOR: Carl Webster, Sr. Solutions Architect, Choice Solutions, LLC
-	LASTEDIT: June 1, 2018
+	LASTEDIT: March 28, 2019
 #>
 
 
@@ -178,7 +220,14 @@ Param(
 	[string]$Folder="",
 	
 	[parameter(Mandatory=$False)] 
+	[string]$GPOFilter="",
+	
+	[parameter(Mandatory=$False)] 
 	[int]$MaxZipSize=150,
+	
+	[parameter(ParameterSetName="Default",Mandatory=$False)] 
+	[Alias("OU")]
+	[string]$OrganizationalUnit="",
 	
 	[parameter(ParameterSetName="SMTP",Mandatory=$True)] 
 	[string]$SmtpServer="",
@@ -214,7 +263,16 @@ Param(
 #http://www.CarlWebster.com
 #Created on April 25, 2018
 
-#Version 1.0 released to the community on 1-May-2018
+#Version 1.20 29-Mar-2019
+#	Received performance tuning help from Michael B. Smith for this update
+#	Add requirement for the ActiveDirectory module
+#	Add simple error checking to the backup and report creation
+#	Add two parameters: GPOFilter and OrganizationalUnit
+#	Adding testing for illegal filename characters '<>:"\/|?*' in the GPO name before 
+#	creating the HTML and XML report files.
+#	If both ADDomain and OrganizationalUnit are specified, set ADDomain to empty string
+#	Updated Function ProcessScriptEnd with new parameters
+#	Updated help text
 #
 #Version 1.10 1-Jun-2018
 #
@@ -223,6 +281,10 @@ Param(
 #		If > MaxZipSize, do not attempt the email
 #	Backup GPOs one at a time
 #		Show the name of each GPO being backed up to show the GPO causing a backup error
+#
+#Version 1.0 released to the community on 1-May-2018
+#
+
 
 Set-StrictMode -Version 2
 
@@ -231,12 +293,24 @@ $PSDefaultParameterValues = @{"*:Verbose"=$True}
 $SaveEAPreference = $ErrorActionPreference
 $ErrorActionPreference = 'SilentlyContinue'
 
+#If $OrganizationalUnit is used, blank out $ADDomain
+If(![String]::IsNullOrEmpty($ADDomain) -and ![String]::IsNullOrEmpty($OrganizationalUnit)) #V1.20
+{
+	#OrganizationalUnit was specified, blank out ADDomain
+	$ADDomain = ""
+}
+
 #region check for DA and elevatation
 Function UserIsaDomainAdmin
 {
 	#function adapted from sample code provided by Thomas Vuylsteke
 	$IsDA = $False
 	$name = $env:username
+	If([String]::IsNullOrEmpty($ADDomain)) 
+	{
+		$ADDomain = $Env:USERDNSDOMAIN
+	}
+	
 	Write-Verbose "$(Get-Date): TokenGroups - Checking groups for $name"
 
 	$root = [ADSI]""
@@ -355,7 +429,7 @@ Function ProcessScriptSetup
 		If($? -and $Null -ne $Result)
 		{
 			$ComputerName = $Result.HostName
-			Write-Verbose "$(Get-Date): Server name has been changed from $ip to $ComputerName"
+			Write-Verbose "$(Get-Date): Server name has been updated from $ip to $ComputerName"
 		}
 		Else
 		{
@@ -413,29 +487,49 @@ Function ProcessScriptSetup
 		}
 	}
 
-	If([String]::IsNullOrEmpty($ComputerName))
+	If(![String]::IsNullOrEmpty($ADDomain))
 	{
-		$results = Get-ADDomain -Identity $ADDomain -EA 0
-		
-		If(!$?)
+		If([String]::IsNullOrEmpty($ComputerName))
 		{
-			Write-Error "Could not find a domain identified by: $ADDomain.`nScript cannot continue.`n`n"
-			$ErrorActionPreference = $SaveEAPreference
-			Exit
+			$results = Get-ADDomain -Identity $ADDomain -EA 0
+			
+			If(!$?)
+			{
+				Write-Error "Could not find a domain identified by: $ADDomain.`nScript cannot continue.`n`n"
+				$ErrorActionPreference = $SaveEAPreference
+				Exit
+			}
 		}
-	}
-	Else
-	{
-		$results = Get-ADDomain -Identity $ADDomain -Server $ComputerName -EA 0
+		Else
+		{
+			$results = Get-ADDomain -Identity $ADDomain -Server $ComputerName -EA 0
 
-		If(!$?)
-		{
-			Write-Error "Could not find a domain with the name of $ADDomain.`n`n`t`tScript cannot continue.`n`n`t`tIs $ComputerName running Active Directory Web Services?"
-			$ErrorActionPreference = $SaveEAPreference
-			Exit
+			If(!$?)
+			{
+				Write-Error "Could not find a domain with the name of $ADDomain.`n`n`t`tScript cannot continue.`n`n`t`tIs $ComputerName running Active Directory Web Services?"
+				$ErrorActionPreference = $SaveEAPreference
+				Exit
+			}
 		}
+		Write-Verbose "$(Get-Date): $ADDomain is a valid domain name"
 	}
-	Write-Verbose "$(Get-Date): $ADDomain is a valid domain name"
+	ElseIf(![String]::IsNullOrEmpty($OrganizationalUnit))
+	{
+		Write-Verbose "$(Get-Date): Validating Organnization Unit"
+		try 
+		{
+			$results = Get-ADOrganizationalUnit -Identity $OrganizationalUnit
+		} 
+		
+		catch
+		{
+			#does not exist
+			Write-Error "Organization Unit $OrganizationalUnit does not exist.`n`nScript cannot continue`n`n"
+			Exit
+		}	
+		
+		Write-Verbose "$(Get-Date): $OrganizationalUnit is a valid OU"
+	}
 
 	If($Folder -ne "")
 	{
@@ -614,14 +708,66 @@ $emailsubject is attached.
 #region main function
 Function GetGpoBackupAndReports
 {
-	Write-Verbose "$(Get-Date): Retrieving all GPOs"
-	$GPOs = @(Get-GPO -All -EA 0)
+	If(![String]::IsNullOrEmpty($OrganizationalUnit))
+	{
+		Write-Verbose "$(Get-Date): Retrieving all GPOs in OU $OrganizationalUnit"
+		$GPOs = New-Object System.Collections.ArrayList
+		$LinkedGPOs = Get-ADOrganizationalUnit -Filter * -SearchBase $OrganizationalUnit -SearchScope Subtree  | Select-Object -ExpandProperty LinkedGroupPolicyObjects
+		
+		If($? -and $Null -ne $LinkedGPOs)
+		{
+			ForEach($LinkedGPO in $LinkedGPOs) 
+			{             
+				$GpoName = ([adsi]"LDAP://$LinkedGPO").DisplayName.ToString()
+				If($GpoName -like "*$GpoFilter*")
+				{
+					$GPOs.Add($GPOName) > $Null
+				}
+			}
+		}
+		ElseIf($? -and $Null -eq $LinkedGPOs)
+		{
+			Write-Warning "No GPOs were found. Script cannot continue."
+			$ErrorActionPreference = $SaveEAPreference
+			Exit
+		}
+		Else
+		{
+			Write-Error "Unable to retrieve GPOs. Script cannot continue."
+			$ErrorActionPreference = $SaveEAPreference
+			Exit
+		}
+	}
+	ElseIf(![String]::IsNullOrEmpty($ADDomain))
+	{
+		Write-Verbose "$(Get-Date): Retrieving all GPOs in $ADDomain"
+		$GPOs = New-Object System.Collections.ArrayList
+		
+		$results = @(Get-GPO -All -EA 0)
+		
+		If($? -and $Null -ne $results)
+		{
+			$results | Where-Object { $_.DisplayName -like "*$GpoFilter*" } | ForEach-Object { $null = $GPOs.Add( $_.DisplayName ) }
+		}
+		ElseIf($? -and $Null -eq $results)
+		{
+			Write-Warning "No GPOs were found. Script cannot continue."
+			$ErrorActionPreference = $SaveEAPreference
+			Exit
+		}
+		Else
+		{
+			Write-Error "Unable to retrieve GPOs. Script cannot continue."
+			$ErrorActionPreference = $SaveEAPreference
+			Exit
+		}
+	}
 
-	If($? -and $Null -ne $GPOs)
+	If($Null -ne $GPOs)
 	{
 		[int]$GPOCnt = $GPOs.Count
 
-		$GPOs = $GPOs | Sort-Object -Property DisplayName
+		$GPOs = $GPOs | Sort-Object
 		
 		Write-Verbose "$(Get-Date): Creating Backup and Reports folders"
 		$ScriptDir = $Script:pwdPath
@@ -631,48 +777,61 @@ Function GetGpoBackupAndReports
 		New-Item -Path $ReportsDir -Force -ItemType "directory" *> $Null
 
 		Write-Verbose "$(Get-Date): Backing up $GPOCnt GPOs to $BackupDir"
-		#$Results = Backup-GPO -All -Path $BackupDir -EA 0 *> $Null
 		
 		#V1.10, backup individual GPO to show which GPO causes the backup to fail
 		
 		ForEach($GPO in $GPOs)
 		{
-			Write-Verbose "$(Get-Date): Backing up GPO $($GPO.DisplayName)"
-			$Null = Backup-GPO -Name $GPO.DisplayName -Path $BackupDir -EA 0 *> $Null
-			
+			Write-Verbose "$(Get-Date): Backing up GPO $GPO"
+
+			$Null = Backup-GPO -Name $GPO -Path $BackupDir -EA 0 *> $Null
+				
 			If(!($?))
 			{
-				Write-Warning "`t`t`tUnable to backup GPO $($GPO.DisplayName)"
+				Write-Warning "`t`t`tUnable to backup GPO $($GPO): $error[0].exception.ToString()"
 			}
 		}
 
 		ForEach($GPO in $GPOs)
 		{
-			Write-Verbose "$(Get-Date): Creating reports for GPO $($GPO.DisplayName)"
-			$Results = Get-GPOReport -Name $GPO.DisplayName -ReportType HTML -Path "$($ReportsDir)\$($GPO.DisplayName).html" 
+			Write-Verbose "$(Get-Date): Creating reports for GPO $GPO"
 			
-			If(!($?))
+			#Version 1.20, add checking the GPO name for illegal filename characters.
+			#for GPO backups, the GUID is used, for GPO reports, the GPO name is used.
+			#you can use characters in a GPO name that are illegal for WIndows filenames.
+			#Using any the following characters '<>:"\/|?*' in a GPO name means Windows 
+			#can't create an HTML or XML file for the GPO report.
+			If($GPO.IndexOfAny( '<>:"\/|?*' ) -ge 0)
 			{
-				Write-Warning "Unable to create an HTML report for GPO $($GPO.DisplayName)"
+				Write-Host "WARNING: GPO `"$GPO`" contains illegal filename characters" -Foreground White 
 			}
-
-			$Results = Get-GPOReport -Name $GPO.DisplayName -ReportType XML -Path "$($ReportsDir)\$($GPO.DisplayName).xml" 
-			
-			If(!($?))
+			Else
 			{
-				Write-Warning "Unable to create an XML report for GPO $($GPO.DisplayName)"
+				try
+				{
+					$Results = Get-GPOReport -Name $GPO -ReportType HTML -Path "$($ReportsDir)\$($GPO).html"
+				}
+				
+				catch
+				{
+					Write-Warning "Unable to create an HTML report for GPO $GPO : $error[0].Exception.ToString()"
+				}
+
+				try
+				{
+					$Results = Get-GPOReport -Name $GPO -ReportType XML -Path "$($ReportsDir)\$($GPO).xml"
+				}
+				
+				catch
+				{
+					Write-Warning "Unable to create an XML report for GPO $GPO : $error[0].exception.ToString()"
+				}
 			}
 		}
 	}
-	ElseIf($? -and $Null -eq $GPOs)
+	ElseIf($Null -eq $GPOs)
 	{
 		Write-Warning "No GPOs were found. Script cannot continue."
-		$ErrorActionPreference = $SaveEAPreference
-		Exit
-	}
-	Else
-	{
-		Write-Error "Unable to retrieve GPOs. Script cannot continue."
 		$ErrorActionPreference = $SaveEAPreference
 		Exit
 	}
@@ -763,19 +922,21 @@ Function ProcessScriptEnd
 	{
 		$SIFile = "$($Script:pwdPath)\GetGpoBackupAndReportsScriptInfo_$(Get-Date -f yyyy-MM-dd_HHmm).txt"
 		Out-File -FilePath $SIFile -InputObject "" 4>$Null
-		Out-File -FilePath $SIFile -Append -InputObject "ComputerName   : $ComputerName" 4>$Null
-		Out-File -FilePath $SIFile -Append -InputObject "Dev            : $Dev" 4>$Null
+		Out-File -FilePath $SIFile -Append -InputObject "ComputerName       : $ComputerName" 4>$Null
+		Out-File -FilePath $SIFile -Append -InputObject "Dev                : $Dev" 4>$Null
 		If($Dev)
 		{
-			Out-File -FilePath $SIFile -Append -InputObject "DevErrorFile   : $Script:DevErrorFile" 4>$Null
+			Out-File -FilePath $SIFile -Append -InputObject "DevErrorFile       : $Script:DevErrorFile" 4>$Null
 		}
-		Out-File -FilePath $SIFile -Append -InputObject "Domain name    : $ADDomain" 4>$Null
-		Out-File -FilePath $SIFile -Append -InputObject "Folder         : $Folder" 4>$Null
-		Out-File -FilePath $SIFile -Append -InputObject "Log            : $($Log)" 4>$Null
-		Out-File -FilePath $SIFile -Append -InputObject "Script Info    : $ScriptInfo" 4>$Null
+		Out-File -FilePath $SIFile -Append -InputObject "Domain name        : $ADDomain" 4>$Null
+		Out-File -FilePath $SIFile -Append -InputObject "Folder             : $Folder" 4>$Null
+		Out-File -FilePath $SIFile -Append -InputObject "GPO Filter         : $GPOFilter" 4>$Null
+		Out-File -FilePath $SIFile -Append -InputObject "Log                : $Log" 4>$Null
+		Out-File -FilePath $SIFile -Append -InputObject "Organizational unit: $OrganizationalUnit" 4>$Null
+		Out-File -FilePath $SIFile -Append -InputObject "Script Info        : $ScriptInfo" 4>$Null
 		Out-File -FilePath $SIFile -Append -InputObject "" 4>$Null
-		Out-File -FilePath $SIFile -Append -InputObject "OS Detected    : $Script:RunningOS" 4>$Null
-		Out-File -FilePath $SIFile -Append -InputObject "PoSH version   : $($Host.Version)" 4>$Null
+		Out-File -FilePath $SIFile -Append -InputObject "OS Detected        : $Script:RunningOS" 4>$Null
+		Out-File -FilePath $SIFile -Append -InputObject "PoSH version       : $($Host.Version)" 4>$Null
 	}
 
 	#stop transcript logging

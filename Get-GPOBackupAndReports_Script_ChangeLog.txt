@@ -4,6 +4,17 @@
 #http://www.CarlWebster.com
 #Created on April 25, 2018
 
+#Version 1.20 29-Mar-2019
+#	Received performance tuning help from Michael B. Smith for this update
+#	Add requirement for the ActiveDirectory module
+#	Add simple error checking to the backup and report creation
+#	Add two parameters: GPOFilter and OrganizationalUnit
+#	Adding testing for illegal filename characters '<>:"\/|?*' in the GPO name before 
+#	creating the HTML and XML report files.
+#	If both ADDomain and OrganizationalUnit are specified, set ADDomain to empty string
+#	Updated Function ProcessScriptEnd with new parameters
+#	Updated help text
+
 #Version 1.10 1-Jun-2018
 #
 #	Add Parameter MaxZipSize (in MBs)
