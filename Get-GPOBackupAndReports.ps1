@@ -71,6 +71,11 @@
 	Specifies the optional output folder to save the output report. 
 	
 	The folder specified must already exist.
+.PARAMETER MaxZipSize
+	Specifies the maximum size, in MB, of the two Zip files created.
+	Default is 150MB which is the limit of Outlook 365 email attachments.
+	
+	https://technet.microsoft.com/en-us/library/exchange-online-limits.aspx#MessageLimits
 .PARAMETER SmtpServer
 	Specifies the optional email server to send the output report. 
 .PARAMETER SmtpPort
@@ -153,9 +158,9 @@
 	No objects are output from this script.
 .NOTES
 	NAME: Get-GPOBackupAndReports.ps1
-	VERSION: 1.00
+	VERSION: 1.10
 	AUTHOR: Carl Webster, Sr. Solutions Architect, Choice Solutions, LLC
-	LASTEDIT: May 1, 2018
+	LASTEDIT: June 1, 2018
 #>
 
 
@@ -171,6 +176,9 @@ Param(
 	
 	[parameter(Mandatory=$False)] 
 	[string]$Folder="",
+	
+	[parameter(Mandatory=$False)] 
+	[int]$MaxZipSize=150,
 	
 	[parameter(ParameterSetName="SMTP",Mandatory=$True)] 
 	[string]$SmtpServer="",
@@ -207,6 +215,14 @@ Param(
 #Created on April 25, 2018
 
 #Version 1.0 released to the community on 1-May-2018
+#
+#Version 1.10 1-Jun-2018
+#
+#	Add Parameter MaxZipSize (in MBs)
+#		Test combined size of the two Zip files created to see if <= to MaxZipSize
+#		If > MaxZipSize, do not attempt the email
+#	Backup GPOs one at a time
+#		Show the name of each GPO being backed up to show the GPO causing a backup error
 
 Set-StrictMode -Version 2
 
@@ -615,13 +631,19 @@ Function GetGpoBackupAndReports
 		New-Item -Path $ReportsDir -Force -ItemType "directory" *> $Null
 
 		Write-Verbose "$(Get-Date): Backing up $GPOCnt GPOs to $BackupDir"
-		$Results = Backup-GPO -All -Path $BackupDir -EA 0 *> $Null
+		#$Results = Backup-GPO -All -Path $BackupDir -EA 0 *> $Null
 		
-		If(!($?))
+		#V1.10, backup individual GPO to show which GPO causes the backup to fail
+		
+		ForEach($GPO in $GPOs)
 		{
-			Write-Error "Backup was not successful. Script will now end."
-			$ErrorActionPreference = $SaveEAPreference
-			Exit
+			Write-Verbose "$(Get-Date): Backing up GPO $($GPO.DisplayName)"
+			$Null = Backup-GPO -Name $GPO.DisplayName -Path $BackupDir -EA 0 *> $Null
+			
+			If(!($?))
+			{
+				Write-Warning "`t`t`tUnable to backup GPO $($GPO.DisplayName)"
+			}
 		}
 
 		ForEach($GPO in $GPOs)
@@ -631,14 +653,14 @@ Function GetGpoBackupAndReports
 			
 			If(!($?))
 			{
-				Write-Warning "Unable to create an HTML report for GPO $GPO.DisplayName"
+				Write-Warning "Unable to create an HTML report for GPO $($GPO.DisplayName)"
 			}
 
 			$Results = Get-GPOReport -Name $GPO.DisplayName -ReportType XML -Path "$($ReportsDir)\$($GPO.DisplayName).xml" 
 			
 			If(!($?))
 			{
-				Write-Warning "Unable to create an XML report for GPO $GPO.DisplayName"
+				Write-Warning "Unable to create an XML report for GPO $($GPO.DisplayName)"
 			}
 		}
 	}
@@ -686,18 +708,37 @@ Function ProcessScriptEnd
 	#email zip files if requested
 	If(![System.String]::IsNullOrEmpty( $SmtpServer ))
 	{
-		Write-Verbose "$(Get-Date): Sending email"
-		$emailattachment = @()
-		$emailAttachment += $destfile1
-		$emailAttachment += $destfile2
-		$MailSuccess = SendEmail $emailAttachment
-		If($MailSuccess)
+		#V1.10, check the size of the combined zip files to see if the size is smaller than MaxZipSize (150MB by default)
+		$Zip1Size = ([System.IO.FileInfo]$destfile1).Length
+		$Zip1Size = ([math]::round(($Zip1Size/1MB),3))
+
+		$Zip2Size = ([System.IO.FileInfo]$destfile2).Length
+		$Zip2Size = ([math]::round(($Zip2Size/1MB),3))
+		
+		$TotalZipSize = $Zip1Size + $Zip2Size
+
+		If($TotalZipSize -le $MaxZipSize)
 		{
-			Write-Verbose "$(Get-Date): Email sent"
+			Write-Verbose "$(Get-Date): Combined size of the two zip files is $TotalZipSize MB. Proceeding with email attempt."
+			Write-Verbose "$(Get-Date): Sending email"
+			$emailattachment = @()
+			$emailAttachment += $destfile1
+			$emailAttachment += $destfile2
+			$MailSuccess = SendEmail $emailAttachment
+			If($MailSuccess)
+			{
+				Write-Verbose "$(Get-Date): Email sent"
+			}
+			Else
+			{
+				Write-Host "$(Get-Date): Unable to send $emailAttachment via email" -ForegroundColor Red
+				Write-Host "$(Get-Date): Please send $emailAttachment to $To" -ForegroundColor Red
+			}
 		}
 		Else
 		{
-			Write-Host "$(Get-Date): Unable to send $emailAttachment via email" -ForegroundColor Red
+			Write-Verbose "$(Get-Date): Combined size of the two zip files is $TotalZipSize. Cancel email attempt."
+			Write-Host "$(Get-Date): Unable to send $emailAttachment via email because of MaxZipSize limit" -ForegroundColor Red
 			Write-Host "$(Get-Date): Please send $emailAttachment to $To" -ForegroundColor Red
 		}
 	}    
