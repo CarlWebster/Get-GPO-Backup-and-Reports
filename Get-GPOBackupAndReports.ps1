@@ -200,9 +200,9 @@
 	No objects are output from this script.
 .NOTES
 	NAME: Get-GPOBackupAndReports.ps1
-	VERSION: 1.20
+	VERSION: 1.21
 	AUTHOR: Carl Webster, Sr. Solutions Architect, Choice Solutions, LLC
-	LASTEDIT: March 28, 2019
+	LASTEDIT: April 11, 2019
 #>
 
 
@@ -263,6 +263,11 @@ Param(
 #http://www.CarlWebster.com
 #Created on April 25, 2018
 
+#Version 1.21 11-Apr-2019
+#	If -OrganizationUnit parameter was used, the $ADDomain paramater was blanked out and
+#		not available for the Zip file creation. IF $ADDomain is blank, set $ADDomain to
+#		$Env:USERDNSDOMAIN
+#
 #Version 1.20 29-Mar-2019
 #	Received performance tuning help from Michael B. Smith for this update
 #	Add requirement for the ActiveDirectory module
@@ -848,6 +853,10 @@ Function ProcessScriptEnd
 	$ScriptDir = $Script:pwdPath
 	$BackupDir = "$($ScriptDir)\GPOBackups"
 	$ReportsDir = "$($ScriptDir)\GPOReports"
+	If([String]::IsNullOrEmpty($ADDomain)) #added V1.21
+	{
+		$ADDomain = $Env:USERDNSDOMAIN
+	}
 
 	[Reflection.Assembly]::LoadWithPartialName( "System.IO.Compression.FileSystem" ) > $Null
 	[System.AppDomain]::CurrentDomain.GetAssemblies() > $Null
