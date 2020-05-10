@@ -97,6 +97,13 @@
 	If both ADDomain and OrganizationalUnit are used, the latter takes preference.
 	
 	Alias OU
+.PARAMETER Rename
+	If a GPO name contains any the following characters, <>:"\/|?*, replace the character 
+	with an _ (Underscore), allowing the creation of a report file in Windows.
+	
+	The GPO is then renamed in the Group Policy Management Console and Active Directory.
+
+	The default is False.
 .PARAMETER SmtpServer
 	Specifies the optional email server to send the output report. 
 .PARAMETER SmtpPort
@@ -140,14 +147,16 @@
 	ADDomain = $Env:USERDNSDOMAIN
 	Folder = $pwd
 .EXAMPLE
-	PS C:\PSScript > .\Get-GPOBackupAndReports.ps1 -ComputerName ChildPDCeDC -ADDomain ChildDomain.com
+	PS C:\PSScript > .\Get-GPOBackupAndReports.ps1 -ComputerName ChildPDCeDC 
+	-ADDomain ChildDomain.com
 	
 	Assuming the script is run from the parent domain.
 	ComputerName = ChildPDCeDC
 	ADDomain = ChildDomain.com
 	Folder = $pwd
 .EXAMPLE
-	PS C:\PSScript > .\Get-GPOBackupAndReports.ps1 -ComputerName ChildPDCeDC -ADDomain ChildDomain.com -Folder c:\GPOReports
+	PS C:\PSScript > .\Get-GPOBackupAndReports.ps1 -ComputerName ChildPDCeDC 
+	-ADDomain ChildDomain.com -Folder c:\GPOReports
 	
 	Assuming the script is run from the parent domain.
 	ComputerName = ChildPDCeDC
@@ -157,16 +166,16 @@
 	PS C:\PSScript > .\Get-GPOBackupAndReports.ps1 -SmtpServer mail.domain.tld
 	-From XDAdmin@domain.tld -To ITGroup@domain.tld	
 	
-	The script will use the email server mail.domain.tld, sending from XDAdmin@domain.tld, 
-	sending to ITGroup@domain.tld.
+	The script will use the email server mail.domain.tld, sending from 
+	XDAdmin@domain.tld, sending to ITGroup@domain.tld.
 	
 	The script will use the default SMTP port 25 and will not use SSL.
 	
 	If the current user's credentials are not valid to send email, 
 	the user will be prompted to enter valid credentials.
 .EXAMPLE
-	PS C:\PSScript > .\Get-GPOBackupAndReports.ps1 -SmtpServer smtp.office365.com -SmtpPort 587
-	-UseSSL -From Webster@CarlWebster.com -To ITGroup@CarlWebster.com	
+	PS C:\PSScript > .\Get-GPOBackupAndReports.ps1 -SmtpServer smtp.office365.com 
+	-SmtpPort 587 -UseSSL -From Webster@CarlWebster.com -To ITGroup@CarlWebster.com	
 	
 	The script will use the email server smtp.office365.com on port 587 using SSL, 
 	sending from webster@carlwebster.com, sending to ITGroup@carlwebster.com.
@@ -194,15 +203,24 @@
 	-ou ""
 	
 	Processes all GPOs in all OUs in the default domain of $Env:USERDNSDOMAIN.
+.EXAMPLE
+	PS C:\PSScript > .\Get-GPOBackupAndReports.ps1 -Rename
+	
+	ComputerName = $Env:USERDNSDOMAIN
+	ADDomain = $Env:USERDNSDOMAIN
+	Folder = $pwd
+	
+	Replace Windows invalid filename charcters in the GPO name with an _ (Underscore).
+	The GPO is then renamed in the Group Policy Management Console and Active Directory. 
 .INPUTS
 	None.  You cannot pipe objects to this script.
 .OUTPUTS
 	No objects are output from this script.
 .NOTES
 	NAME: Get-GPOBackupAndReports.ps1
-	VERSION: 1.22
-	AUTHOR: Carl Webster, Sr. Solutions Architect, Choice Solutions, LLC
-	LASTEDIT: April 24, 2019
+	VERSION: 1.23
+	AUTHOR: Carl Webster
+	LASTEDIT: September 12, 2019
 #>
 
 
@@ -229,6 +247,9 @@ Param(
 	[Alias("OU")]
 	[string]$OrganizationalUnit="",
 	
+	[parameter(ParameterSetName="Default",Mandatory=$False)] 
+	[switch]$Rename=$False,
+
 	[parameter(ParameterSetName="SMTP",Mandatory=$True)] 
 	[string]$SmtpServer="",
 
@@ -262,6 +283,13 @@ Param(
 #@carlwebster on Twitter
 #http://www.CarlWebster.com
 #Created on April 25, 2018
+
+#Version 1.23 12-Sep-2019
+#	Add a Rename parameter switch. (Thanks to Jani Kohonen for this suggestion)
+#	If a GPO name contains any the following characters, <>:"\/|?*, replace the character 
+#	with an _ (Underscore), allowing the creation of a report file in Windows.
+#	The GPO is then renamed in the Group Policy Management Console and Active Directory.
+#	The default is False.
 
 #Version 1.22 24-Apr-2019
 #	Fixed bug when a GPO had been linked multiple times. The script counted all the GPOs, 
@@ -809,14 +837,47 @@ Function GetGpoBackupAndReports
 			
 			#Version 1.20, add checking the GPO name for illegal filename characters.
 			#for GPO backups, the GUID is used, for GPO reports, the GPO name is used.
-			#you can use characters in a GPO name that are illegal for WIndows filenames.
+			#you can use characters in a GPO name that are illegal for Windows filenames.
 			#Using any the following characters '<>:"\/|?*' in a GPO name means Windows 
 			#can't create an HTML or XML file for the GPO report.
+			
+			$Skip = $False #V1.23
 			If($GPO.IndexOfAny( '<>:"\/|?*' ) -ge 0)
 			{
-				Write-Host "WARNING: GPO `"$GPO`" contains illegal filename characters" -Foreground White 
+				If($Rename -eq $False) #default behaviour
+				{
+					$Skip = $True #V1.23
+					Write-Host "WARNING: GPO `"$GPO`" contains illegal filename characters. No report created." -Foreground White 
+				}
+				ElseIf($Rename -eq $True) #V1.23 new option
+				{
+					Write-Host "GPO `"$GPO`" contains illegal filename characters. Replacing with _" -Foreground White 
+					#replace each of the invalid characters with an _ (underscore)
+					$NewGPOName = $GPO
+					$NewGPOName = $NewGPOName.Replace('<','_')
+					$NewGPOName = $NewGPOName.Replace('>','_')
+					$NewGPOName = $NewGPOName.Replace(':','_')
+					$NewGPOName = $NewGPOName.Replace('"','_')
+					$NewGPOName = $NewGPOName.Replace('\','_')
+					$NewGPOName = $NewGPOName.Replace('/','_')
+					$NewGPOName = $NewGPOName.Replace('|','_')
+					$NewGPOName = $NewGPOName.Replace('?','_')
+					$NewGPOName = $NewGPOName.Replace('*','_')
+					Write-Host "New GPO name is `"$NewGPOName`"" -Foreground White 
+					
+					$results = Rename-GPO -Name $GPO -TargetName $NewGPOName
+					
+					If($? -and $Null -ne $results)
+					{
+						Write-Host ""
+						Write-Host "GPO successfully renamed" -Foreground White 
+						Write-Host ""
+						$GPO = $NewGPOName
+					}
+				}
 			}
-			Else
+			
+			If($Skip -eq $False) #V1.23
 			{
 				try
 				{

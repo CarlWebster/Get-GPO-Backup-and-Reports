@@ -4,6 +4,13 @@
 #http://www.CarlWebster.com
 #Created on April 25, 2018
 
+#Version 1.23 12-Sep-2019
+#	Add a Rename parameter switch. (Thanks to Jani Kohonen for this suggestion)
+#	If a GPO name contains any the following characters, <>:"\/|?*, replace the character 
+#	with an _ (Underscore), allowing the creation of a report file in Windows.
+#	The GPO is then renamed in the Group Policy Management Console and Active Directory.
+#	The default is False.
+
 #Version 1.22 24-Apr-2019
 #	Fixed bug when a GPO had been linked multiple times. The script counted all the GPOs, 
 #		even the duplicates. Added -Unique to the Sort.
