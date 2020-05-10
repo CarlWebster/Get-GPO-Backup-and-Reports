@@ -4,4 +4,12 @@
 #http://www.CarlWebster.com
 #Created on April 25, 2018
 
+#Version 1.10 1-Jun-2018
+#
+#	Add Parameter MaxZipSize (in MBs)
+#		Test combined size of the two Zip files created to see if <= to MaxZipSize
+#		If > MaxZipSize, do not attempt the email
+#	Backup GPOs one at a time
+#		Show the name of each GPO being backed up to show the GPO causing a backup error
+
 #Version 1.0 released to the community on 1-May-2018
