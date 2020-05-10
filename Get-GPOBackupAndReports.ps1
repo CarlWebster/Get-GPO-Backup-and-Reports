@@ -200,9 +200,9 @@
 	No objects are output from this script.
 .NOTES
 	NAME: Get-GPOBackupAndReports.ps1
-	VERSION: 1.21
+	VERSION: 1.22
 	AUTHOR: Carl Webster, Sr. Solutions Architect, Choice Solutions, LLC
-	LASTEDIT: April 11, 2019
+	LASTEDIT: April 24, 2019
 #>
 
 
@@ -263,6 +263,12 @@ Param(
 #http://www.CarlWebster.com
 #Created on April 25, 2018
 
+#Version 1.22 24-Apr-2019
+#	Fixed bug when a GPO had been linked multiple times. The script counted all the GPOs, 
+#		even the duplicates. Added -Unique to the Sort.
+#		If a GPO was linked ten times, the script backed up the GPO ten times and created
+#		the reports ten times.
+#
 #Version 1.21 11-Apr-2019
 #	If -OrganizationUnit parameter was used, the $ADDomain paramater was blanked out and
 #		not available for the Zip file creation. IF $ADDomain is blank, set $ADDomain to
@@ -770,10 +776,10 @@ Function GetGpoBackupAndReports
 
 	If($Null -ne $GPOs)
 	{
+		$GPOs = $GPOs | Sort-Object -Unique
+		
 		[int]$GPOCnt = $GPOs.Count
 
-		$GPOs = $GPOs | Sort-Object
-		
 		Write-Verbose "$(Get-Date): Creating Backup and Reports folders"
 		$ScriptDir = $Script:pwdPath
 		$BackupDir = "$($ScriptDir)\GPOBackups"
